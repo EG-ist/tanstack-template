@@ -6,7 +6,8 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 
 const basePlugins = [
-  TanStackRouterVite({ autoCodeSplitting: true }), 
+  // API routes (src/routes/api) are served by TanStack Start, not the page router
+  TanStackRouterVite({ autoCodeSplitting: true, routeFileIgnorePattern: "^api$" }),
   viteReact(), 
   tailwindcss(),
 ];
