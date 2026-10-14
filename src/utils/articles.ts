@@ -23,5 +23,7 @@ export function formatPublishedDate(publishedAt: string) {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
+    // Fixed zone so server and browser render the same date
+    timeZone: 'UTC',
   })
 }

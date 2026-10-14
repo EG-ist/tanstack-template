@@ -1,7 +1,5 @@
 import { createFileRoute, Link, notFound } from '@tanstack/react-router'
-import ReactMarkdown from 'react-markdown'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize from 'rehype-sanitize'
+import { SanitizedHtml } from '../../components/SanitizedHtml'
 import { formatPublishedDate, getPublishedArticle } from '../../utils/articles'
 
 export const Route = createFileRoute('/blog/$slug')({
@@ -14,12 +12,20 @@ export const Route = createFileRoute('/blog/$slug')({
     meta: article
       ? [
           { title: article.title },
-          { name: 'description', content: article.metaDescription },
+          ...(article.metaDescription
+            ? [
+                { name: 'description', content: article.metaDescription },
+                { property: 'og:description', content: article.metaDescription },
+              ]
+            : []),
           { property: 'og:type', content: 'article' },
           { property: 'og:title', content: article.title },
-          { property: 'og:description', content: article.metaDescription },
           ...(article.heroImageUrl
-            ? [{ property: 'og:image', content: article.heroImageUrl }]
+            ? [
+                { property: 'og:image', content: article.heroImageUrl },
+                { property: 'og:image:alt', content: article.heroImageAlt ?? '' },
+                { name: 'twitter:card', content: 'summary_large_image' },
+              ]
             : []),
           { property: 'article:published_time', content: article.publishedAt },
         ]
@@ -58,13 +64,10 @@ function BlogArticle() {
             className="object-cover w-full my-8 rounded-lg aspect-video"
           />
         )}
-        {/* Content comes from a third party, so raw HTML is sanitized */}
-        <ReactMarkdown
+        <SanitizedHtml
+          html={article.contentHtml}
           className="prose dark:prose-invert max-w-none"
-          rehypePlugins={[rehypeRaw, rehypeSanitize]}
-        >
-          {article.contentMarkdown || article.contentHtml}
-        </ReactMarkdown>
+        />
       </article>
     </main>
   )

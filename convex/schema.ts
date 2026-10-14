@@ -17,24 +17,21 @@ export default defineSchema({
     externalId: v.string(),
     title: v.string(),
     slug: v.string(),
-    metaDescription: v.string(),
+    metaDescription: v.optional(v.string()),
     contentHtml: v.string(),
     contentMarkdown: v.string(),
     heroImageUrl: v.optional(v.string()),
     heroImageAlt: v.optional(v.string()),
-    images: v.array(
-      v.object({
-        url: v.string(),
-        alt: v.string(),
-        filename: v.string(),
-        isHero: v.boolean(),
-      })
-    ),
     language: v.string(),
-    status: v.string(),
+    status: v.union(v.literal("publish"), v.literal("draft")),
     publishedAt: v.string(),
   })
-    .index("by_slug", ["slug"])
     .index("by_external_id", ["externalId"])
-    .index("by_published_at", ["publishedAt"]),
+    .index("by_slug", ["slug"])
+    .index("by_status_published_at", ["status", "publishedAt"]),
+  // Article images copied into Convex storage, served at /blog-images/<filename>
+  blogImages: defineTable({
+    filename: v.string(),
+    storageId: v.id("_storage"),
+  }).index("by_filename", ["filename"]),
 });

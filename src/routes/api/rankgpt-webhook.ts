@@ -1,70 +1,129 @@
 import { json } from '@tanstack/react-start'
 import { createAPIFileRoute } from '@tanstack/react-start/api'
 import { ConvexHttpClient } from 'convex/browser'
+import { ConvexError } from 'convex/values'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { api } from '../../../convex/_generated/api'
 
-// Receives articles pushed by RankGPT (https://rankgpt.com) and stores them in
-// Convex so they render at /blog/$slug.
+// Receives articles pushed by RankGPT (https://rankgpt.com). Images are copied
+// into Convex storage and the article is saved by convex/articles.ts:ingest.
 //
 // Required environment variables:
-//   RANKGPT_WEBHOOK_SECRET - the rgpt_whsec_... key from RankGPT (set it in the
-//                            site's env AND the Convex deployment env)
+//   RANKGPT_WEBHOOK_SECRET - shared secret from RankGPT; set it in the site's
+//                            env AND the Convex deployment env
 //   VITE_CONVEX_URL        - the Convex deployment URL
+// Optional:
+//   SITE_URL               - public site origin for the returned link
+//                            (defaults to Netlify's URL, then the request origin)
 
-type RankGPTImage = {
-  url: string
-  alt?: string
-  filename?: string
-  is_hero?: boolean
-}
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const FILENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/
 
-type RankGPTArticle = {
-  event?: string
-  id: string | number
+type Article = {
+  externalId: string
   title: string
   slug: string
-  meta_description?: string
-  content_html?: string
-  content_markdown?: string
-  hero_image_url?: string
-  hero_image_alt?: string
-  images?: Array<RankGPTImage>
-  language?: string
-  status?: string
-  published_at?: string
+  metaDescription?: string
+  contentHtml: string
+  contentMarkdown: string
+  heroImageUrl?: string
+  heroImageAlt?: string
+  images: Array<{ url: string; filename: string }>
+  language: string
+  status: 'publish' | 'draft'
+  publishedAt: string
 }
-
-const UPSERT_EVENTS = new Set([
-  'article.published',
-  'article.updated',
-  'article.created',
-])
-const DELETE_EVENTS = new Set(['article.deleted', 'article.unpublished'])
 
 function sha256(value: string) {
   return createHash('sha256').update(value).digest()
 }
 
-// Accepts the secret from either `Authorization: Bearer ...` or `X-API-Key`
+// Accepts `Authorization: Bearer <secret>` or `X-API-Key: <secret>`.
+// Hashing first gives equal-length buffers, so the comparison is constant time.
 function isAuthorized(request: Request, secret: string) {
-  const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+  const authorization = request.headers.get('authorization')
+  const bearer = authorization?.match(/^Bearer (.+)$/i)?.[1] ?? null
   const apiKey = request.headers.get('x-api-key')
   const expected = sha256(secret)
   return [bearer, apiKey].some(
-    (candidate) => !!candidate && timingSafeEqual(sha256(candidate), expected),
+    (candidate) => candidate !== null && timingSafeEqual(sha256(candidate), expected),
   )
 }
 
-function isArticle(body: unknown): body is RankGPTArticle {
-  if (!body || typeof body !== 'object') return false
-  const article = body as Record<string, unknown>
-  return (
-    (typeof article.id === 'string' || typeof article.id === 'number') &&
-    typeof article.title === 'string' &&
-    typeof article.slug === 'string' &&
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(article.slug)
-  )
+const isString = (value: unknown): value is string => typeof value === 'string'
+const isOptionalString = (value: unknown): value is string | null | undefined =>
+  value == null || typeof value === 'string'
+
+function isHttpUrl(value: string) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol)
+  } catch {
+    return false
+  }
+}
+
+// Returns the article, or an error message describing the first problem
+function parseArticle(body: Record<string, unknown>): Article | string {
+  const {
+    id,
+    title,
+    slug,
+    meta_description,
+    content_html,
+    content_markdown,
+    hero_image_url,
+    hero_image_alt,
+    images,
+    language,
+    status,
+    published_at,
+  } = body
+
+  if (!isString(id) || !id) return 'id must be a non-empty string'
+  if (!isString(title) || !title.trim()) return 'title must be a non-empty string'
+  if (!isString(slug) || !SLUG_PATTERN.test(slug)) return 'slug must be lowercase words separated by hyphens'
+  if (!isOptionalString(meta_description)) return 'meta_description must be a string or null'
+  if (!isString(content_html)) return 'content_html must be a string'
+  if (!isOptionalString(content_markdown)) return 'content_markdown must be a string'
+  if (!isOptionalString(hero_image_url)) return 'hero_image_url must be a string or null'
+  if (!isOptionalString(hero_image_alt)) return 'hero_image_alt must be a string or null'
+  if (!isString(language) || !language) return 'language must be a non-empty string'
+  if (status !== 'publish' && status !== 'draft') return 'status must be "publish" or "draft"'
+  if (!isString(published_at) || Number.isNaN(Date.parse(published_at))) {
+    return 'published_at must be an ISO 8601 date'
+  }
+  if (!Array.isArray(images)) return 'images must be an array'
+
+  const parsedImages: Article['images'] = []
+  for (const [index, image] of images.entries()) {
+    if (!image || typeof image !== 'object') return `images[${index}] must be an object`
+    const { url, filename } = image as Record<string, unknown>
+    if (!isString(url) || !isHttpUrl(url)) return `images[${index}].url must be an http(s) URL`
+    if (!isString(filename) || !FILENAME_PATTERN.test(filename)) {
+      return `images[${index}].filename must contain only letters, digits, ".", "_" and "-"`
+    }
+    parsedImages.push({ url, filename })
+  }
+
+  return {
+    externalId: id,
+    title,
+    slug,
+    metaDescription: meta_description ?? undefined,
+    contentHtml: content_html,
+    contentMarkdown: content_markdown ?? '',
+    heroImageUrl: hero_image_url || undefined,
+    heroImageAlt: hero_image_alt ?? undefined,
+    images: parsedImages,
+    language,
+    status,
+    publishedAt: published_at,
+  }
+}
+
+function siteOrigin(request: Request) {
+  const configured = process.env.SITE_URL ?? process.env.URL
+  return (configured ?? new URL(request.url).origin).replace(/\/+$/, '')
 }
 
 export const APIRoute = createAPIFileRoute('/api/rankgpt-webhook')({
@@ -84,66 +143,33 @@ export const APIRoute = createAPIFileRoute('/api/rankgpt-webhook')({
     try {
       body = await request.json()
     } catch {
-      return json({ error: 'Invalid JSON' }, { status: 400 })
+      return json({ error: 'Body must be valid JSON' }, { status: 400 })
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return json({ error: 'Body must be a JSON object' }, { status: 400 })
     }
 
-    const event =
-      request.headers.get('x-rankgpt-event') ??
-      (body as { event?: string } | null)?.event ??
-      'article.published'
+    if ((body as { event?: unknown }).event === 'test') {
+      return json({ ok: true })
+    }
+
+    const article = parseArticle(body as Record<string, unknown>)
+    if (typeof article === 'string') {
+      return json({ error: article }, { status: 400 })
+    }
+
     const deliveryId = request.headers.get('x-rankgpt-delivery')
-
-    if (!isArticle(body)) {
-      return json({ error: 'Invalid article payload' }, { status: 400 })
-    }
-
-    const convex = new ConvexHttpClient(convexUrl)
-    const externalId = String(body.id)
-
     try {
-      if (DELETE_EVENTS.has(event)) {
-        await convex.mutation(api.articles.removeByExternalId, { secret, externalId })
-        return json({ ok: true, event, deliveryId, slug: body.slug })
-      }
-
-      if (!UPSERT_EVENTS.has(event)) {
-        // Acknowledge unknown events so RankGPT doesn't keep retrying them
-        return json({ ok: true, ignored: true, event, deliveryId })
-      }
-
-      await convex.mutation(api.articles.upsert, {
-        secret,
-        article: {
-          externalId,
-          title: body.title,
-          slug: body.slug,
-          metaDescription: body.meta_description ?? '',
-          contentHtml: body.content_html ?? '',
-          contentMarkdown: body.content_markdown ?? '',
-          heroImageUrl: body.hero_image_url || undefined,
-          heroImageAlt: body.hero_image_alt || undefined,
-          images: (body.images ?? []).map((image) => ({
-            url: image.url,
-            alt: image.alt ?? '',
-            filename: image.filename ?? '',
-            isHero: image.is_hero ?? false,
-          })),
-          language: body.language ?? 'en',
-          status: body.status ?? 'publish',
-          publishedAt: body.published_at ?? new Date().toISOString(),
-        },
-      })
+      const convex = new ConvexHttpClient(convexUrl)
+      const { slug } = await convex.action(api.articles.ingest, { secret, article })
+      return json({ link: `${siteOrigin(request)}/blog/${slug}` })
     } catch (error) {
-      console.error('RankGPT webhook failed to save article', deliveryId, error)
+      const data = error instanceof ConvexError ? error.data : undefined
+      console.error('RankGPT webhook failed', { deliveryId, data, error })
+      if (data?.code === 'IMAGE_DOWNLOAD_FAILED') {
+        return json({ error: `Failed to download image ${data.url}` }, { status: 500 })
+      }
       return json({ error: 'Failed to save article' }, { status: 500 })
     }
-
-    return json({
-      ok: true,
-      event,
-      deliveryId,
-      slug: body.slug,
-      url: `/blog/${body.slug}`,
-    })
   },
 })

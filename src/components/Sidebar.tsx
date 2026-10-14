@@ -1,4 +1,5 @@
-import { PlusCircle, MessageCircle, Trash2, Edit2 } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import { PlusCircle, MessageCircle, Trash2, Edit2, BookOpen } from 'lucide-react';
 
 interface SidebarProps {
   conversations: Array<{ id: string; title: string }>;
@@ -100,5 +101,15 @@ export const Sidebar = ({
         </div>
       ))}
     </div>
+
+    <footer className="p-4 border-t border-gray-700">
+      <Link
+        to="/blog"
+        className="flex items-center gap-2 text-sm text-gray-300 hover:text-white"
+      >
+        <BookOpen className="w-4 h-4" />
+        Blog
+      </Link>
+    </footer>
   </div>
 ); 
