@@ -129,9 +129,8 @@ function siteOrigin(request: Request) {
 export const APIRoute = createAPIFileRoute('/api/rankgpt-webhook')({
   POST: async ({ request }) => {
     const secret = process.env.RANKGPT_WEBHOOK_SECRET
-    const convexUrl = process.env.VITE_CONVEX_URL ?? import.meta.env.VITE_CONVEX_URL
-    if (!secret || !convexUrl) {
-      console.error('RankGPT webhook is missing RANKGPT_WEBHOOK_SECRET or VITE_CONVEX_URL')
+    if (!secret) {
+      console.error('RankGPT webhook is missing RANKGPT_WEBHOOK_SECRET')
       return json({ error: 'Webhook not configured' }, { status: 500 })
     }
 
@@ -156,6 +155,13 @@ export const APIRoute = createAPIFileRoute('/api/rankgpt-webhook')({
     const article = parseArticle(body as Record<string, unknown>)
     if (typeof article === 'string') {
       return json({ error: article }, { status: 400 })
+    }
+
+    // Checked after the test event so RankGPT can connect before Convex is set up
+    const convexUrl = process.env.VITE_CONVEX_URL ?? import.meta.env.VITE_CONVEX_URL
+    if (!convexUrl) {
+      console.error('RankGPT webhook is missing VITE_CONVEX_URL')
+      return json({ error: 'Webhook not configured' }, { status: 500 })
     }
 
     const deliveryId = request.headers.get('x-rankgpt-delivery')
